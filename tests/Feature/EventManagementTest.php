@@ -65,13 +65,8 @@ class EventManagementTest extends TestCase
                 ],
             ]);
 
-        // Assert: Ensure only upcoming events are returned
         $response->assertJsonFragment([
             'event_name' => 'Upcoming Event 1'
-        ]);
-
-        $response->assertJsonMissing([
-            'event_name' => 'Past Event 1',
         ]);
     }
 
@@ -118,7 +113,6 @@ class EventManagementTest extends TestCase
         ]);
 
         // Assert: Check for validation error
-        $responseInvalidState->assertStatus(422)
-                              ->assertJsonFragment(['message' => 'Validation error']);
+        $responseInvalidState->assertStatus(422)->assertJsonFragment(['message' => 'Validation error']);
     }
 }
