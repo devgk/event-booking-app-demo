@@ -38,6 +38,7 @@ This is a Laravel-based event booking system, allowing users to create events, r
    ```
 	php artisan passport:client --personal
    ```
+   It will ask for personal access client token name - provide one for example "Auth"
 5. Run Laravel Server
    ```
 	php artisan serve
@@ -85,3 +86,9 @@ This is a Laravel-based event booking system, allowing users to create events, r
    1. With authentication
    2. New user account will be created if does not exists
    3. Preventing Duplicate Booking
+
+
+### Recent Changes
+1. Created a Request Validation CLass  - To Validate Th request
+2. Created a Service Classes - To move the core logic to services folder
+3. Created a Custom rule Class - To Add custom rule for validation

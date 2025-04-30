@@ -5,14 +5,29 @@ namespace App\Http\Controllers\Api;
 use App\Models\User;
 use App\Models\Event;
 use App\Models\Booking;
+use App\Helpers\ApiResponse;
 use Illuminate\Http\Request;
+use App\Rules\LocationCountry;
 use Illuminate\Support\Carbon;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Auth;
+use App\Services\EventManagementService;
+use App\Http\Requests\CreateEventRequest;
+use App\Http\Requests\UpdateEventRequest;
 use Illuminate\Support\Facades\Validator;
 
 class EventManagementController extends Controller
 {
+	protected $eventManagementService;
+
+	// Implementing Application Logic
+    public function __construct(EventManagementService $eventManagementService)
+    {
+		// Creating the object of event management service class
+		// which can be used in the controller as required
+        $this->eventManagementService = $eventManagementService;
+    }
+
     /**
 	 * @OA\Post(
 	 *     tags={"Events - Event Management"},
@@ -63,68 +78,24 @@ class EventManagementController extends Controller
 		// Validate the provided page_number, location, and event_state
 		$validator = Validator::make($request->all(), [
 			'page_number' => 'required|integer|min:1',
-			'location_country' => 'nullable|string|max:255',
+			'location_country' => ['required', 'string', new LocationCountry],
 			'event_state' => 'nullable|in:upcoming,past',
 		]);
 
+		// If validation fails, return a response with the validation errors
 		if ($validator->fails()) {
-			return response()->json([
-				'status' => false,
-				'message' => 'Validation error',
-				'errors' => $validator->errors()
-			], 422);
+			return ApiResponse::error('Validation error', 422, $validator->errors()->all());
 		}
 
+		// Get page number from the request
 		$pageNumber = $request->page_number;
-		$location_country = $request->location_country;
-		// Default to 'upcoming' if not provided
-		$eventState = $request->event_state ?? 'upcoming';
+		// Creating filter array from request
+        $filters = $request->only(['location_country', 'event_state']);
+		// Get events list as per the filter and page number provided
+        $event_list = $this->eventManagementService->listEvents($filters, $pageNumber);
 
-		// Define how many events per page (fixed at 10)
-		$perPage = 10;
-
-		// Get the events query
-		$eventsQuery = Event::query();
-
-		// Filter by location if provided
-		if ($location_country) {
-			$eventsQuery->where('location_country', strtoupper($location_country));
-		}
-
-		// Filter by event_state
-		$today = Carbon::today(); // Get today's date
-		if ($eventState == 'upcoming') {
-			$eventsQuery->where('event_date', '>=', $today); // Show events today or in the future
-		} elseif ($eventState == 'past') {
-			$eventsQuery->where('event_date', '<', $today); // Show past events
-		}
-
-		// Fetch the paginated events, passing the page number to paginate
-		$events = $eventsQuery->paginate($perPage, ['*'], 'page', $pageNumber);
-
-		// Format the event data for the response
-		$event_list = $events->map(function ($event) {
-			return [
-				"event_id" => $event->id,
-				"event_name" => $event->name,
-				"event_description" => $event->description,
-				"seats_available" => $event->seats_available,
-				"event_date" => $event->event_date,
-				"event_location_country" => $event->location_country,
-			];
-		});
-
-		// Return paginated response with additional pagination info
-		return response()->json([
-			'status' => true,
-			'message' => 'Event list fetched successfully',
-			'data' => [
-				'events' => $event_list,
-				'current_page' => $events->currentPage(),
-				'total_pages' => $events->lastPage(),
-			],
-			'message' => 'Event details fetched successfully',
-		], 200);
+		// Return paginated response
+        return ApiResponse::success($event_list, 'Event list fetched successfully');
 	}
 
 	/**
@@ -170,35 +141,19 @@ class EventManagementController extends Controller
 	{
 		// Validate that $id is a valid integer
 		if (!is_numeric($id) || (int)$id != $id) {
-			return response()->json([
-				'message' => 'Invalid event ID',
-			], 400);
+			return ApiResponse::error('Invalid event ID', 400);
 		}
 
-		// Find Event
-		$event = Event::find($id);
+		// Get Events as per the id
+		$event = $this->eventManagementService->viewEvent($id);
 
+		// Return error if event not found
 		if (!$event) {
-			return response()->json([
-				'message' => 'Event not found',
-			], 404);
-		}
+			return ApiResponse::error('Event not found', 404);
+        }
 
-		// Get Total Bookings
-		$total_bookings = $event->bookings()->count();
-
-		return response()->json([
-			'status' => true,
-			'message' => 'Event details fetched successfully',
-			'data' => [
-				'event_name' => $event->name,
-				'event_description' => $event->description,
-				'event_date' => $event->event_date,
-				'event_location_country' => $event->location_country,
-				'seats_available' => $event->seats_available,
-				'seats_booked' => $total_bookings,
-			],
-		], 200);
+		// Return success with event details
+		return ApiResponse::success($event, 'Event details fetched successfully');
 	}
 
 	/**
@@ -250,51 +205,16 @@ class EventManagementController extends Controller
 	 *     ),
 	 * )
 	 */
-	public function createEvent(Request $request)
+	public function createEvent(CreateEventRequest $request)
 	{
-		// Request Validation
-		$validator = Validator::make($request->all(), [
-			'name' => 'required|string|max:255',
-			'description' => 'nullable|string',
-			'event_date' => 'required|date|unique:events,event_date,NULL,id,name,' . $request->name,
-			'seats_available' => 'required|integer|min:1',
-			'location_country' => 'required|string|max:255',
-		]);
-
-		// Validation Error Response
-		if ($validator->fails()) {
-			return response()->json([
-				'message' => 'Validation error',
-				'errors' => $validator->errors()
-			], 422);
-		}
-
 		// Get the current user's ID (authenticated via API token)
-		$userId = Auth::guard('api')->user()->id;
+        $userId = Auth::guard('api')->user()->id;
 
 		// Create Event
-		$event = Event::create([
-			'name' => $request->name,
-			'description' => $request->description,
-			'event_date' => $request->event_date,
-			'seats_available' => $request->seats_available,
-			'location_country' => strtoupper($request->location_country),
-			'user_id' =>  $userId,
-		]);
+        $new_event = $this->eventManagementService->createEvent($request->all(), $userId);
 
-		// Return Response
-		return response()->json([
-			'status' => true,
-			'message' => "Event created successfully.",
-			'data' => [
-				"id" => $event->id,
-				"name" => $event->name,
-				"description" => $event->description,
-				"event_date" => $event->event_date,
-				"seats_available" => $event->seats_available,
-				"location_country" => $event->location_country,
-			]
-		], 201);
+		// Return Success Response
+        return ApiResponse::success($new_event, 'Event created successfully', 201);
 	}
 
 	/**
@@ -346,62 +266,18 @@ class EventManagementController extends Controller
 	 *     ),
 	 * )
 	 */
-	public function updateEvent($id, Request $request)
+	public function updateEvent($id, UpdateEventRequest $request)
 	{
-		// Validate that $id is a valid integer
-		if (!is_numeric($id) || (int)$id != $id) {
-			return response()->json([
-				'message' => 'Invalid event ID',
-			], 400);
-		}
-
-		// Find Event
-		$event = Event::find($id);
-
-		if (!$event) {
-			return response()->json([
-				'message' => 'Event not found',
-			], 404);
-		}
-
-		// Request Validation
-		$validator = Validator::make($request->all(), [
-			'name' => 'required|string|max:255',
-			'event_date' => 'required|date|unique:events,event_date,' . $id . ',id,name,' . $request->name,
-			'location' => 'required|string|max:255',
-			'description' => 'nullable|string',
-		]);
-
-		// Validation Error Response
-		if ($validator->fails()) {
-			return response()->json([
-				'message' => 'Validation error',
-				'errors' => $validator->errors()
-			], 422);
-		}
-
 		// Update the event with the validated data
-		$event->update([
-			'name' => $request->name,
-			'description' => $request->description,
-			'event_date' => $request->event_date,
-			'location' => $request->location,
-			'seats_available' => $request->seats_available, // Update the seats_available field
-		]);
+		$event = $this->eventManagementService->updateEvent($id, $request->all());
 
-		// Return Response with updated event data
-		return response()->json([
-			'status' => true,
-			'message' => "Event updated successfully.",
-			'data' => [
-				"id" => $event->id,
-				"name" => $event->name,
-				"description" => $event->description,
-				"event_date" => $event->event_date,
-				"location_country" => $event->location_country,
-				"seats_available" => $event->seats_available,
-			]
-		], 200);
+		// Return error if event not found & updated
+        if (!$event) {
+            return ApiResponse::error('Event not found', 404);
+        }
+
+		// Return Success Response
+        return ApiResponse::success($event, 'Event updated successfully');
 	}
 
 	/**
@@ -440,26 +316,17 @@ class EventManagementController extends Controller
 	{
 		// Validate that $id is a valid integer
 		if (!is_numeric($id) || (int)$id != $id) {
-			return response()->json([
-				'message' => 'Invalid event ID',
-			], 400);
+			return ApiResponse::error('Invalid event ID', 400);
 		}
 
-		// Find Event
-		$event = Event::find($id);
+		// Delete Event Using ID
+		$result = $this->eventManagementService->deleteEvent($id);
 
-		if (!$event) {
-			return response()->json([
-				'message' => 'Event not found',
-			], 404);
-		}
+		// Return error if event not found & deleted
+        if (!$result) {
+            return ApiResponse::error('Event not found', 404);
+        }
 
-		// Delete Event
-		$event->delete();
-
-		return response()->json([
-			'status' => true,
-			'message' => 'Event deleted successfully',
-		], 200);
+        return ApiResponse::success([], 'Event deleted successfully');
 	}
 }

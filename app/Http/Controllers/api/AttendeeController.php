@@ -8,12 +8,22 @@ use App\Models\Booking;
 use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
+use App\Services\AttendeeService;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\Hash;
+use App\Http\Requests\BookEventRequest;
 use Illuminate\Support\Facades\Validator;
 
 class AttendeeController extends Controller
 {
+	protected $attendeeService;
+
+    // Inject AttendeeService into the controller
+    public function __construct(AttendeeService $attendeeService)
+    {
+        $this->attendeeService = $attendeeService;
+    }
+
 	/**
 	 * @OA\Post(
 	 *     tags={"Attendees APIs"},
@@ -73,88 +83,12 @@ class AttendeeController extends Controller
 	 *     )
 	 * )
 	 */
-	public function bookEvent(Request $request)
+	public function bookEvent(BookEventRequest $request)
 	{
-        // Validate input
-        $validator = Validator::make($request->all(), [
-            'name'      => 'required|string|max:255',
-            'email'     => 'required|email',
-            'event_id'  => 'required|integer|exists:events,id',
-            'address'   => 'nullable|string|max:255',
-            'phone'     => 'nullable|string|max:10',
-        ]);
+		// Call the service method to handle event booking
+		$response = $this->attendeeService->bookEvent($request->validated());
 
-        if ($validator->fails()) {
-            return response()->json([
-                'status' => false,
-                'message' => 'Validation error',
-                'errors' => $validator->errors()
-            ], 422);
-        }
-
-        // Retrieve the event directly using the validated event_id
-        $event = Event::find($request->event_id);
-
-		// Check if there are available seats
-		$totalBookings = Booking::where('event_id', $event->id)->count();
-		if ($totalBookings >= $event->seats_available) {
-			return response()->json([
-				'status' => false,
-				'message' => 'No available seats for this event.',
-			], 400);
-		}
-
-        // Check if the user already exists in the database
-        $user = User::where('email', $request->email)->first();
-
-        if ($user) {
-            // Check if the user has already booked this event
-            $booking = Booking::where([
-                'user_id' => $user->id,
-                'event_id' => $event->id
-            ])->first();
-
-            if ($booking) {
-                return response()->json([
-                    'status' => false,
-                    'message' => "Event \"{$event->name}\" already booked by {$user->email} on {$booking->booking_date}.",
-                ], 400);
-            }
-
-			if ($user->role_id == 1) {
-                return response()->json([
-                    'status' => false,
-                    'message' => "Event cannot be booked by Event Manager (or) Admin.",
-                ], 400);
-            }
-        } else {
-            // Create a new user if they don't exist
-            $user = User::create([
-                'name'      => $request->name,
-                'email'     => $request->email,
-                'password'  => Hash::make(Str::random(10)),  // Generate a random password for new users
-                'address'   => $request->address,
-                'phone'     => $request->phone,
-            ]);
-        }
-
-        // Create the booking for the user
-        $booking = Booking::create([
-            'user_id'      => $user->id,
-            'event_id'     => $event->id,
-            'booking_date' => Carbon::now()->toDateString(), // Add the current date
-        ]);
-
-        // Return success response
-        return response()->json([
-            'status' => true,
-            'message' => 'Event booked successfully',
-            'data' => [
-                'user_email' => $user->email,
-                'event' => $event->name,
-                'booking_date' => $booking->booking_date
-            ]
-        ], 201);
+		return $response;
     }
 
 	/**
@@ -221,64 +155,9 @@ class AttendeeController extends Controller
 	 */
 	public function getMyBookedEvents(Request $request)
 	{
-		// Validate the provided email and page_number
-		$validator = Validator::make($request->all(), [
-			'email' => 'required|email',
-			'page_number' => 'nullable|integer|min:1',
-		]);
+		// Call the service method to fetch booked events
+		$response = $this->attendeeService->getMyBookedEvents($request->email, $request->page_number);
 
-		if ($validator->fails()) {
-			return response()->json([
-				'status' => false,
-				'message' => 'Validation error',
-				'errors' => $validator->errors()
-			], 422);
-		}
-
-		// Fetch the user based on the provided email
-		$user = User::where('email', $request->email)->first();
-
-		if (!$user) {
-			return response()->json([
-				'status' => false,
-				'message' => 'User not found',
-			], 404);
-		}
-
-		// Set the page number and per page
-		$pageNumber = $request->page_number ?: 1; // Default to 1 if no page_number is provided
-		$perPage = 10; // Define how many events per page
-
-		// Get the paginated booked events for this user
-		$bookedEvents = Booking::where('user_id', $user->id)
-			->with('event') // eager load the related event data
-			->paginate($perPage, ['*'], 'page', $pageNumber);
-
-		// If there are no bookings, return a custom message
-		if ($bookedEvents->isEmpty()) {
-			return response()->json([
-				'status' => false,
-				'message' => "No events found for user with email: {$request->email}.",
-			], 404);
-		}
-
-		// Return the list of events with their names, booking dates, and total pages
-		$events = $bookedEvents->map(function ($booking) {
-			return [
-				'event_name' => $booking->event->name,
-				'event_date' => $booking->event->event_date,
-				'booking_date' => $booking->booking_date
-			];
-		});
-
-		return response()->json([
-			'status' => true,
-			'message' => 'Booked events fetched successfully',
-			'data' => [
-				'events' => $events,
-				'current_page' => $bookedEvents->currentPage(),
-				'total_pages' => $bookedEvents->lastPage(),
-			]
-		], 200);
+		return $response;
 	}
 }
